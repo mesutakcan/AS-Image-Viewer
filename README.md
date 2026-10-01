@@ -1,9 +1,9 @@
-# AS Image Viewer v1.8
+# AS Image Viewer v1.9
 
 [![AutoHotkey](https://img.shields.io/badge/Language-AutoHotkey_v2-green.svg)](https://www.autohotkey.com/)
 [![Platform](https://img.shields.io/badge/Platform-Windows-blue.svg)](https://www.microsoft.com/windows)
 [![License](https://img.shields.io/badge/License-GPL_v3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.8-brightgreen.svg)](https://github.com/mesutakcan/AS-Image-Viewer/releases) 
+[![Version](https://img.shields.io/badge/Version-1.9-brightgreen.svg)](https://github.com/mesutakcan/AS-Image-Viewer/releases) 
 
 ![GitHub stars](https://img.shields.io/github/stars/mesutakcan/AS-Image-Viewer?style=social)
 ![GitHub forks](https://img.shields.io/github/forks/mesutakcan/AS-Image-Viewer?style=social)
@@ -35,6 +35,11 @@ AS Image Viewer is a minimalist image viewer application that uses GDI+ for rend
 - Delete current image
 - Copy image to clipboard
 - Paste image from clipboard
+- Custom frameless window with minimize and close controls shown on hover
+- Improved image rendering with a cached paint buffer
+- More precise zoom levels, including high magnification
+- Improved image loading and memory handling
+- Fixed an issue where the image could disappear after the window was moved off-screen and then brought back
 
 ## Requirements
 
@@ -54,14 +59,15 @@ AS Image Viewer is a minimalist image viewer application that uses GDI+ for rend
 
 The application supports multiple languages through INI files stored in the "lang" folder.
 Current supported languages:
-- English `en.ini`
-- Turkish `tr.ini`
-- Russian `ru.ini`
+- Arabic `ar.ini`
 - Chinese `zh.ini`
+- English `en.ini`
 - French `fr.ini`
 - German `de.ini`
 - Italian `it.ini`
+- Russian `ru.ini`
 - Spanish `es.ini`
+- Turkish `tr.ini`
 
 **There may be errors in the translated texts because they are translated with artificial intelligence.**
 
@@ -79,13 +85,14 @@ Translate the contents of the `en.ini` file into the desired language and save i
 **[File]** File related messages\
 **[Shortcuts]** Keyboard and mouse shortcut descriptions\
 **[FileInfo]** File information texts\
-**[About]** About dialog texts
+**[About]** About dialog texts\
+**[Error]** Error messages
 
 ## Source Code
 
 The source code for this program is available in the [src](https://github.com/mesutakcan/AS-Image-Viewer/tree/main/src) folder. To use the program source code, you'll need to have AutoHotkey v2 installed on your system. You can run the script directly using the AutoHotkey interpreter. Alternatively, you can compile the script into an executable file for easier distribution.
 
-This application uses the library file [Gdip_All.ahk](https://github.com/buliasz/AHKv2-Gdip/blob/master/Gdip_All.ahk)
+This application uses a trimmed-down local copy of the GDI+ support library: [gdip.ahk](src/gdip.ahk). It contains only the drawing functions required by this project instead of the full [Gdip_All.ahk](https://github.com/buliasz/AHKv2-Gdip/blob/master/Gdip_All.ahk) library.
 
 ## Opening Image File
 
@@ -145,44 +152,64 @@ This application uses the library file [Gdip_All.ahk](https://github.com/buliasz
 
 ## History
 
-- v1.0: 30/07/2024 First version
-- v1.1: 11/08/2024
-  - Code improvements
-  - Added new shortcuts for navigation
-  - Improved zoom features
-- v1.2: 18/08/2024
-  - Code improvements
-- v1.3: 25/03/2025
-  - Code improvements
-  - Added command line support for opening images
-  - Added drag and drop support
-- v1.3.1: 09/04/2025
-  - Minor issues fixed
-- v1.4.0: 19/04/2025
-  - Added language support (English, Turkish, Russian, Chinese, French, German, Italian)
-- v1.5: 22/05/2025
-  - Copy image to clipboard
-- v1.6: 14/06/2025
-  - Code improvements
-  - Language support optimization
-  - Spanish language support added
-  - Added keyboard shortcuts to context menu
-- v1.7: 26/05/2026
-  - Added paste image from clipboard
-  - Added delete image feature
-  - Added save settings (window position, center image, etc.)
-  - Added icons to right-click menu
-  - Improved memory handling when loading files
-- v1.8: 05/08/2026
-  - Added Language submenu to right-click menu (users can switch language at runtime)
-  - Language preference is saved and restored on next launch
-  - Automatic language detection based on the system language
+### v1.0: 30/07/2024
+- First version
 
-## TODO
-- Rotate image
-- Rotate image based on EXIF orientation
-- Slideshow
-- Zoom to mouse cursor
+### v1.1: 11/08/2024
+- Code improvements
+- Added new shortcuts for navigation
+- Improved zoom features
+
+### v1.2: 18/08/2024
+- Code improvements
+
+### v1.3: 25/03/2025
+- Code improvements
+- Added command line support for opening images
+- Added drag and drop support
+
+### v1.3.1: 09/04/2025
+- Minor issues fixed
+
+### v1.4.0: 19/04/2025
+- Added language support (English, Turkish, Russian, Chinese, French, German, Italian)
+
+### v1.5: 22/05/2025
+- Copy image to clipboard
+
+### v1.6: 14/06/2025
+- Code improvements
+- Language support optimization
+- Spanish language support added
+- Added keyboard shortcuts to context menu
+
+### v1.7: 26/05/2026
+- Added paste image from clipboard
+- Added delete image feature
+- Added save settings (window position, center image, etc.)
+- Added icons to right-click menu
+- Improved memory handling when loading files
+
+### v1.8: 05/08/2026
+- Added Language submenu to right-click menu (users can switch language at runtime)
+- Language preference is saved and restored on next launch
+- Automatic language detection based on the system language
+
+### v1.9: 01/10/2026
+- Arabic language support added
+- Redesigned the internal application state and UI organization
+- Added custom minimize and close buttons to the frameless window
+- Improved rendering using a cached image buffer
+- Improved image loading and resource cleanup
+- Fixed images disappearing after moving the window off-screen and bringing it back
+- Added more granular zoom levels, including up to 5000%
+- Sorted available language choices alphabetically
+- Added GitHub repository access from the menu
+
+## Credits
+
+AS Image Viewer builds on open-source work from:
+- [AHKv2-Gdip](https://github.com/buliasz/AHKv2-Gdip) by buliasz - this project uses a reduced, project-specific [gdip.ahk](src/gdip.ahk) version containing only the drawing functions required by AS Image Viewer.
 
 ## License
 
@@ -199,7 +226,3 @@ Contributions are welcome! If you'd like to add features, fix bugs, or improve t
 **Blog**: [mesutakcan.blogspot.com](http://mesutakcan.blogspot.com)\
 **GitHub**: [mesutakcan](http://github.com/mesutakcan)\
 **YouTube**: [Mesut Akcan](http://youtube.com/mesutakcan)
-
-
-
-
