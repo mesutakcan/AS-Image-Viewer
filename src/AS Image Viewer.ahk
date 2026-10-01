@@ -1,8 +1,8 @@
 /*
 ======================
 AS Image Viewer
-v1.8
-05/08/2026
+v1.9
+01/10/2026
 ======================
 AS Image Viewer is a minimalist image viewer application that uses GDI+ for rendering.
 It supports multiple image formats and allows easy navigation and management through a simple GUI interface.
@@ -13,16 +13,13 @@ mesutakcan.blogspot.com
 github.com/mesutakcan
 youtube.com/mesutakcan
 =======================
-TODO:
-=======================
-- Add built-in file association setup (register as default app for image formats via Registry)
 */
 
 ;@Ahk2Exe-SetMainIcon app_icon.ico
 ;@Ahk2Exe-ExeName AS Image Viewer.exe
 ;@Ahk2Exe-SetName AS Image Viewer
 ;@Ahk2Exe-SetDescription A simple and fast image viewer
-;@Ahk2Exe-SetFileVersion 1.8
+;@Ahk2Exe-SetFileVersion 1.9
 ;@Ahk2Exe-SetCompanyName akcanSoft
 ;@Ahk2Exe-SetCopyright ©2026 Mesut Akcan
 
@@ -30,46 +27,86 @@ TODO:
 #SingleInstance Off
 #NoTrayIcon
 
-#Include "gdip_all.ahk"
+#Include "gdip.ahk"
 #Include "langSupport.ahk"
 
-A_ScriptName := "AS Image Viewer v1.8"
+A_ScriptName := "AS Image Viewer v1.9"
 
-g := { Hwnd: 0 }
-settingsFile := A_ScriptDir "\settings.ini"
-savedLangCode := IniRead(settingsFile, "Settings", "Language", "")
-LoadLanguage(savedLangCode)
+appState := {
+	settingsFile: A_ScriptDir "\settings.ini",
+	savedLangCode: "",
+	extensions: "*.jpg; *.jpeg; *.png; *.gif; *.bmp; *.tif; *.ico; *.webp; *.wmf",
+	supportedExtensions: Map("jpg", true, "jpeg", true, "png", true, "gif", true, "bmp", true, "tif", true, "ico", true, "webp", true, "wmf", true),
+	dropFile: "",
+	DblClickTime: DllCall("GetDoubleClickTime", "UInt"),
+	imageFiles: [],
+	imgFile: "",
+	currentFolder: "",
+	lastIndex: 0,
+	imgNo: 0,
+	isClipboardImage: false,
+	centerImage: true,
+	windowX: 0,
+	windowY: 0,
+	windowPositionLoaded: false,
+	windowPositionDirty: false,
+	settingsAtLoad: Map(),
+	titleBtnWidth: 32,
+	titleBtnHeight: 30,
+	mouseTracking: Map(),
+	hMemDC: 0,
+	hMemBitmap: 0,
+	hOldBitmap: 0,
+	cachedW: 0,
+	cachedH: 0,
+	bitmap: 0,
+	originalWidth: 0,
+	originalHeight: 0,
+	imgWidth: 0,
+	imgHeight: 0,
+	zoomFactor: 1,
+	zoomSteps: [1, 2, 5, 10, 15, 20, 30, 40, 50, 60, 80, 100, 125, 150, 175, 200, 300, 500, 700, 1000, 2000, 3000, 5000],
+	maxDisplayPixels: 25000000,
+	minDisplaySize: 100,
+	pToken: 0
+}
+ui := {
+	gui: { Hwnd: 0 },
+	minButton: 0,
+	closeButton: 0,
+	rcMenu: 0,
+	langMenu: 0,
+	langCodeByName: Map(),
+	mnuTxt: {}
+}
+appState.savedLangCode := IniRead(appState.settingsFile, "Settings", "Language", "")
+LoadLanguage(appState.savedLangCode)
 
-if !pToken := Gdip_Startup() {
+appState.pToken := Gdip_Startup()
+if !appState.pToken {
 	MsgBox(lang["File_load_failed"], , "Icon! 4096")
 	ExitApp()
 }
 
-extensions := "*.jpg; *.jpeg; *.png; *.gif; *.bmp; *.tif; *.ico; *.webp; *.wmf"
-dropFile := ""
-DblClickTime := DllCall("GetDoubleClickTime", "UInt")
-imageFiles := []
-imgFile := ""
-currentFolder := ""
-lastIndex := 0
-imgNo := 0
-isClipboardImage := false
-centerImage := true
-windowX := 0
-windowY := 0
-windowPositionLoaded := false
-
-g := Gui("+OwnDialogs -Caption -Border +AlwaysOnTop -DPIScale")
-g.OnEvent("Close", GuiClose)
-g.OnEvent("Size", GuiSize)
-g.OnEvent("DropFiles", Gui_DropFiles)
+ui.gui := Gui("+OwnDialogs -Caption -Border +AlwaysOnTop -DPIScale +0x2000000")
+ui.gui.OnEvent("Close", GuiClose)
+ui.gui.OnEvent("DropFiles", Gui_DropFiles)
+ui.gui.SetFont("s10 cWhite", "Segoe MDL2 Assets")
+ui.minButton := ui.gui.AddText("w" appState.titleBtnWidth " h" appState.titleBtnHeight " Hidden Center +0x200 Background0078D7", Chr(0xE921))
+ui.minButton.OnEvent("Click", MinimizeWindow)
+ui.closeButton := ui.gui.AddText("w" appState.titleBtnWidth " h" appState.titleBtnHeight " Hidden Center +0x200 BackgroundC42B1C", Chr(0xE8BB))
+ui.closeButton.OnEvent("Click", GuiClose)
+OnMessage(0x0200, HandleCloseButtonMouseMove)
+OnMessage(0x02A3, HandleCloseButtonMouseLeave)
+OnMessage(0x0014, EraseBkgnd)
+OnMessage(0x000F, PaintImage)
 
 CreateMenu()
 LoadSettings()
 ApplyMenuCheckStates()
 OpenFile()
 
-#HotIf WinActive(g.Hwnd)
+#HotIf WinActive(ui.gui.Hwnd)
 Home:: LoadImageByMode("first")
 Browser_Back::
 Left:: LoadImageByMode("prev")
@@ -91,9 +128,9 @@ F5:: ShowImage()
 ^v:: PasteImageFromClipboard()
 Esc:: ToolTip()
 
-#HotIf mouseIsOver(g.Hwnd)
+#HotIf mouseIsOver(ui.gui.Hwnd)
 Down::
-RButton:: rcMenu.Show()
+RButton:: ui.rcMenu.Show()
 WheelUp:: ZoomImage(1)
 WheelDown:: ZoomImage(-1)
 XButton1:: LoadImageByMode("prev")
@@ -103,7 +140,8 @@ XButton2:: LoadImageByMode("next")
 #HotIf
 
 HandleMouseClick() {
-	if (A_ThisHotkey = A_PriorHotkey && A_TimeSincePriorHotkey < DblClickTime) {
+	global appState
+	if (A_ThisHotkey = A_PriorHotkey && A_TimeSincePriorHotkey < appState.DblClickTime) {
 		switch A_ThisHotkey {
 			case "~MButton":
 				ZoomImage(2)
@@ -118,7 +156,7 @@ HandleMouseClick() {
 }
 
 CreateMenu() {
-	global rcMenu, mnuTxt, langMenu, langCodeByName
+	global ui
 
 	imageres := A_WinDir "\system32\imageres.dll"
 	shell32 := A_WinDir "\system32\shell32.dll"
@@ -126,9 +164,13 @@ CreateMenu() {
 
 	langMenu := Menu()
 	langCodeByName := Map()
+	languageNames := ""
 	for code, name in GetAvailableLanguages() {
-		langMenu.Add(name, LanguageMenuHandler)
 		langCodeByName[name] := code
+		languageNames .= name "`n"
+	}
+	for name in StrSplit(Sort(RTrim(languageNames, "`n"), "D`n"), "`n") {
+		langMenu.Add(name, LanguageMenuHandler)
 	}
 
 	mnuTxt := {
@@ -153,192 +195,169 @@ CreateMenu() {
 		border: lang["Menu_border"],
 		center: lang["Menu_center"],
 		shortcuts: lang["Menu_shortcuts"],
+		githubRepo: lang["Menu_github_repo"],
 		about: lang["Menu_about"]
 	}
 
-	menuItems := [
-		{ text: mnuTxt.open, iconFile: imageres, iconNo: 195 },
-		{ text: mnuTxt.exit, iconFile: imageres, iconNo: 94 },
-		{ separator: true },
-		{ text: "Language", submenu: langMenu, iconFile: shell32, iconNo: 14 },
-		{ separator: true },
-		{ text: mnuTxt.first },
-		{ text: mnuTxt.prev },
-		{ text: mnuTxt.next, iconFile: shell32, iconNo: 298 },
-		{ text: mnuTxt.last },
-		{ separator: true },
-		{ text: mnuTxt.delete, iconFile: shell32, iconNo: 63 },
-		{ separator: true },
-		{ text: mnuTxt.zoomin },
-		{ text: mnuTxt.zoomout },
-		{ text: mnuTxt.fit, iconFile: shell32, iconNo: 16 },
-		{ text: mnuTxt.osize },
-		{ separator: true },
-		{ text: mnuTxt.refresh, iconFile: imageres, iconNo: 230 },
-		{ text: mnuTxt.copy, iconFile: shell32, iconNo: 135 },
-		{ text: mnuTxt.paste, iconFile: shell32, iconNo: 261 },
-		{ separator: true },
-		{ text: mnuTxt.fileinfo, iconFile: shell32, iconNo: 222 },
-		{ text: mnuTxt.fileprop, iconFile: shell32, iconNo: 283 },
-		{ text: mnuTxt.fileinfolder, iconFile: shell32, iconNo: 267 },
-		{ separator: true },
-		{ text: mnuTxt.aot, check: true },
-		{ text: mnuTxt.border },
-		{ text: mnuTxt.center, check: true },
-		{ separator: true },
-		{ text: mnuTxt.shortcuts, iconFile: shell32, iconNo: 30 },
-		{ text: mnuTxt.about, iconFile: shell32, iconNo: 155 }
+	menuItems := [{ text: mnuTxt.open, iconFile: imageres, iconNo: 195 }, { text: mnuTxt.exit, iconFile: imageres, iconNo: 94 }, { separator: true }, { text: "Language", submenu: langMenu, iconFile: shell32, iconNo: 14 }, { separator: true }, { text: mnuTxt.first }, { text: mnuTxt.prev }, { text: mnuTxt.next, iconFile: shell32, iconNo: 298 }, { text: mnuTxt.last }, { separator: true }, { text: mnuTxt.delete, iconFile: shell32, iconNo: 63 }, { separator: true }, { text: mnuTxt.zoomin }, { text: mnuTxt.zoomout }, { text: mnuTxt.fit, iconFile: shell32, iconNo: 16 }, { text: mnuTxt.osize }, { separator: true }, { text: mnuTxt.refresh, iconFile: imageres, iconNo: 230 }, { text: mnuTxt.copy, iconFile: shell32, iconNo: 135 }, { text: mnuTxt.paste, iconFile: shell32, iconNo: 261 }, { separator: true }, { text: mnuTxt.fileinfo, iconFile: shell32, iconNo: 222 }, { text: mnuTxt.fileprop, iconFile: shell32, iconNo: 283 }, { text: mnuTxt.fileinfolder, iconFile: shell32, iconNo: 267 }, { separator: true }, { text: mnuTxt.aot }, { text: mnuTxt.border }, { text: mnuTxt.center }, { separator: true }, { text: mnuTxt.shortcuts, iconFile: shell32, iconNo: 30 }, { text: mnuTxt.githubRepo }, { text: mnuTxt.about, iconFile: shell32, iconNo: 155 }
 	]
 
-	for index, item in menuItems {
-		if (item.HasOwnProp("separator")) {
+	for item in menuItems {
+		if item.HasOwnProp("separator") {
 			rcMenu.Add()
 			continue
 		}
-		if (item.HasOwnProp("submenu")) {
-			rcMenu.Add(item.text, item.submenu)
-		} else {
-			rcMenu.Add(item.text, menuHandler)
-		}
-		if (item.HasOwnProp("iconFile") && item.HasOwnProp("iconNo")) {
+		rcMenu.Add(item.text, item.HasOwnProp("submenu") ? item.submenu : menuHandler)
+		if item.HasOwnProp("iconFile")
 			rcMenu.SetIcon(item.text, item.iconFile, item.iconNo)
-		}
-		if (item.HasOwnProp("check") && item.check) {
-			rcMenu.Check(item.text)
-		}
 	}
+
+	ui.rcMenu := rcMenu
+	ui.langMenu := langMenu
+	ui.langCodeByName := langCodeByName
+	ui.mnuTxt := mnuTxt
 }
 
-; Dil alt menüsünden bir öğe seçildiğinde çağrılır
 LanguageMenuHandler(itemName, itemPos, menuObj) {
-	global langCodeByName, currentLangCode
-	if !langCodeByName.Has(itemName)
+	global currentLangCode, ui
+	if !ui.langCodeByName.Has(itemName)
 		return
-	selectedCode := langCodeByName[itemName]
+	selectedCode := ui.langCodeByName[itemName]
 	if (selectedCode = currentLangCode)
 		return
 	SetLanguage(selectedCode)
 }
 
-; Uygulama dilini değiştirir, tercihi kaydeder ve menüyü yeniden oluşturur
 SetLanguage(code) {
-	global settingsFile
+	global appState
 	LoadLanguage(code)
-	IniWrite(code, settingsFile, "Settings", "Language")
+	IniWrite(code, appState.settingsFile, "Settings", "Language")
 	CreateMenu()
 	ApplyMenuCheckStates()
 }
 
-; rcMenu'deki işaret (check) durumlarını mevcut pencere/ayar durumuna göre uygular
 ApplyMenuCheckStates() {
-	global rcMenu, mnuTxt, g, centerImage, currentLangCode, langMenu, langCodeByName
+	global currentLangCode, appState, ui
 
-	(WinGetExStyle(g) & 0x8) ? rcMenu.Check(mnuTxt.aot) : rcMenu.Uncheck(mnuTxt.aot)
-	(WinGetStyle(g) & 0x800000) ? rcMenu.Check(mnuTxt.border) : rcMenu.Uncheck(mnuTxt.border)
-	centerImage ? rcMenu.Check(mnuTxt.center) : rcMenu.Uncheck(mnuTxt.center)
-
-	for name, code in langCodeByName {
-		if (code = currentLangCode)
-			langMenu.Check(name)
-		else
-			langMenu.Uncheck(name)
-	}
+	SetMenuCheck(ui.rcMenu, ui.mnuTxt.aot, IsAlwaysOnTop())
+	SetMenuCheck(ui.rcMenu, ui.mnuTxt.border, HasBorder())
+	SetMenuCheck(ui.rcMenu, ui.mnuTxt.center, appState.centerImage)
+	for name, code in ui.langCodeByName
+		SetMenuCheck(ui.langMenu, name, code = currentLangCode)
 }
 
+SetMenuCheck(menuObj, itemName, checked) {
+	if checked
+		menuObj.Check(itemName)
+	else
+		menuObj.Uncheck(itemName)
+}
+
+IsAlwaysOnTop() => (WinGetExStyle(ui.gui) & 0x8) != 0
+
+HasBorder() => (WinGetStyle(ui.gui) & 0x800000) != 0
+
 menuHandler(item, *) {
-	global mnuTxt
+	global ui
 	switch item {
-		case mnuTxt.open: OpenFile()
-		case mnuTxt.exit: GuiClose()
-		case mnuTxt.first: LoadImageByMode("first")
-		case mnuTxt.prev: LoadImageByMode("prev")
-		case mnuTxt.next: LoadImageByMode("next")
-		case mnuTxt.last: LoadImageByMode("last")
-		case mnuTxt.delete: DeleteCurrentImage()
-		case mnuTxt.zoomin: ZoomImage(1)
-		case mnuTxt.zoomout: ZoomImage(-1)
-		case mnuTxt.fit: ZoomImage(2)
-		case mnuTxt.osize: ZoomImage(0)
-		case mnuTxt.refresh: ShowImage()
-		case mnuTxt.copy: CopyImageToClipboard()
-		case mnuTxt.paste: PasteImageFromClipboard()
-		case mnuTxt.fileinfo: FileInfo()
-		case mnuTxt.fileprop: FileProperties()
-		case mnuTxt.fileinfolder: ShowFileInFolder()
-		case mnuTxt.aot: toggleAOT()
-		case mnuTxt.border: toggleBorder()
-		case mnuTxt.center: toggleCenterImage()
-		case mnuTxt.shortcuts: Shortcuts()
-		case mnuTxt.about: About()
+		case ui.mnuTxt.open: OpenFile()
+		case ui.mnuTxt.exit: GuiClose()
+		case ui.mnuTxt.first: LoadImageByMode("first")
+		case ui.mnuTxt.prev: LoadImageByMode("prev")
+		case ui.mnuTxt.next: LoadImageByMode("next")
+		case ui.mnuTxt.last: LoadImageByMode("last")
+		case ui.mnuTxt.delete: DeleteCurrentImage()
+		case ui.mnuTxt.zoomin: ZoomImage(1)
+		case ui.mnuTxt.zoomout: ZoomImage(-1)
+		case ui.mnuTxt.fit: ZoomImage(2)
+		case ui.mnuTxt.osize: ZoomImage(0)
+		case ui.mnuTxt.refresh: ShowImage()
+		case ui.mnuTxt.copy: CopyImageToClipboard()
+		case ui.mnuTxt.paste: PasteImageFromClipboard()
+		case ui.mnuTxt.fileinfo: FileInfo()
+		case ui.mnuTxt.fileprop: FileProperties()
+		case ui.mnuTxt.fileinfolder: ShowFileInFolder()
+		case ui.mnuTxt.aot: toggleAOT()
+		case ui.mnuTxt.border: toggleBorder()
+		case ui.mnuTxt.center: toggleCenterImage()
+		case ui.mnuTxt.shortcuts: Shortcuts()
+		case ui.mnuTxt.githubRepo: Run("https://github.com/mesutakcan/AS-Image-Viewer")
+		case ui.mnuTxt.about: About()
 	}
 }
 
 LoadSettings() {
-	global settingsFile, g, currentFolder, centerImage, windowX, windowY, windowPositionLoaded
+	global appState, ui
 
-	; Always on Top setting
-	aotSetting := IniRead(settingsFile, "Settings", "AlwaysOnTop", "1")
+	aotSetting := IniRead(appState.settingsFile, "Settings", "AlwaysOnTop", "1")
 	if (aotSetting = "0")
-		WinSetAlwaysOnTop(0, g)
+		WinSetAlwaysOnTop(0, ui.gui)
 
-	; Window Border setting
-	borderSetting := IniRead(settingsFile, "Settings", "WindowBorder", "0")
+	borderSetting := IniRead(appState.settingsFile, "Settings", "WindowBorder", "0")
 	if (borderSetting = "1")
-		WinSetStyle("+0x800000", g)
+		WinSetStyle("+0x800000", ui.gui)
+	else
+		WinSetStyle("-0x800000", ui.gui)
 
-	; Center image setting
-	centerImage := IniRead(settingsFile, "Settings", "CenterImage", "1") != "0"
+	appState.centerImage := IniRead(appState.settingsFile, "Settings", "CenterImage", "1") != "0"
 
-	; Last window position
-	savedWindowX := IniRead(settingsFile, "Settings", "WindowX", "")
-	savedWindowY := IniRead(settingsFile, "Settings", "WindowY", "")
+	savedWindowX := IniRead(appState.settingsFile, "Settings", "WindowX", "")
+	savedWindowY := IniRead(appState.settingsFile, "Settings", "WindowY", "")
 	if (RegExMatch(savedWindowX, "^-?\d+$") && RegExMatch(savedWindowY, "^-?\d+$")) {
-		windowX := Integer(savedWindowX)
-		windowY := Integer(savedWindowY)
-		windowPositionLoaded := true
+		appState.windowX := Integer(savedWindowX)
+		appState.windowY := Integer(savedWindowY)
+		appState.windowPositionLoaded := true
 	}
 
-	; Last folder setting
-	currentFolder := IniRead(settingsFile, "Settings", "LastFolder", A_MyDocuments)
-	if !DirExist(currentFolder)
-		currentFolder := A_MyDocuments
+	appState.currentFolder := IniRead(appState.settingsFile, "Settings", "LastFolder", A_MyDocuments)
+	if !DirExist(appState.currentFolder)
+		appState.currentFolder := A_MyDocuments
+
+	appState.settingsAtLoad := Map(
+		"AlwaysOnTop", IsAlwaysOnTop() ? "1" : "0",
+		"WindowBorder", HasBorder() ? "1" : "0",
+		"CenterImage", appState.centerImage ? "1" : "0",
+		"LastFolder", appState.currentFolder
+	)
 }
 
 SaveSettings() {
-	global settingsFile, currentFolder, g, centerImage
+	global appState, ui
 
-	; Save Always on Top setting
-	try
-		IniWrite((WinGetExStyle(g) & 0x8) ? "1" : "0", settingsFile, "Settings", "AlwaysOnTop")
-	catch
-		IniWrite("1", settingsFile, "Settings", "AlwaysOnTop")
-
-	; Save Window Border setting
-	try
-		IniWrite((WinGetStyle(g) & 0x800000) ? "1" : "0", settingsFile, "Settings", "WindowBorder")
-	catch
-		IniWrite("0", settingsFile, "Settings", "WindowBorder")
-
-	; Save center image setting
-	IniWrite(centerImage ? "1" : "0", settingsFile, "Settings", "CenterImage")
-
-	; Save last window position
 	try {
-		WinGetPos(&x, &y, , , g)
-		IniWrite(x, settingsFile, "Settings", "WindowX")
-		IniWrite(y, settingsFile, "Settings", "WindowY")
+		aotSetting := IsAlwaysOnTop() ? "1" : "0"
+		borderSetting := HasBorder() ? "1" : "0"
+	} catch {
+		aotSetting := "1"
+		borderSetting := "0"
+	}
+	current := Map(
+		"AlwaysOnTop", aotSetting,
+		"WindowBorder", borderSetting,
+		"CenterImage", appState.centerImage ? "1" : "0"
+	)
+	if DirExist(appState.currentFolder)
+		current["LastFolder"] := appState.currentFolder
+
+	for key, value in current {
+		if (value != appState.settingsAtLoad[key])
+			IniWrite(value, appState.settingsFile, "Settings", key)
 	}
 
-	; Save last folder
-	if (currentFolder != "" && DirExist(currentFolder))
-		IniWrite(currentFolder, settingsFile, "Settings", "LastFolder")
+	if appState.windowPositionDirty {
+		try {
+			WinGetPos(&x, &y, , , ui.gui)
+			IniWrite(x, appState.settingsFile, "Settings", "WindowX")
+			IniWrite(y, appState.settingsFile, "Settings", "WindowY")
+		}
+	}
 }
 
 OpenFile() {
-	global bitmap, extensions
+	global appState
 	iFile := GetImageFilePath()
 	if !iFile {
-		if !IsSet(bitmap) {
+		if !appState.bitmap {
 			MsgBox(lang["File_nofile"], , "Icon! 4096")
 			ExitApp()
 		}
@@ -346,7 +365,7 @@ OpenFile() {
 	}
 
 	SplitPath iFile, , , &ext
-	if !ext || !InStr(extensions, ext) || !FileExist(iFile) {
+	if !ext || !appState.supportedExtensions.Has(StrLower(ext)) || !FileExist(iFile) {
 		MsgBox(lang["File_invalid_file"] ":`n" iFile, , "Icon! 4096")
 		return
 	}
@@ -355,147 +374,143 @@ OpenFile() {
 
 GetImageFilePath() {
 	static argsUsed := false
-	global dropFile, extensions, currentFolder
+	global appState, ui
 	if !argsUsed && A_Args.Length > 0 {
 		argsUsed := true
 		return A_Args[1]
 	}
-	if dropFile {
-		dFile := dropFile
-		dropFile := ""
+	if appState.dropFile {
+		dFile := appState.dropFile
+		appState.dropFile := ""
 		return dFile
 	}
-	g.Opt("+OwnDialogs")
+	ui.gui.Opt("+OwnDialogs")
 
-	startFolder := (currentFolder != "" && DirExist(currentFolder)) ? currentFolder : ""
-
-	return FileSelect(, startFolder, lang["File_select_image_file"], "Images (" extensions ")")
+	startFolder := (appState.currentFolder != "" && DirExist(appState.currentFolder)) ? appState.currentFolder : ""
+	return FileSelect(, startFolder, lang["File_select_image_file"], "Images (" appState.extensions ")")
 }
 
 LoadImageFromFile(lFile) {
-	global imageFiles, currentFolder, lastIndex, imgNo, isClipboardImage
-	isClipboardImage := false
+	global appState
 	SplitPath lFile, , &folder
-	if (folder != currentFolder || imageFiles.Length = 0) {
-		imageFiles := GetImageFilesInFolder(folder)
-		currentFolder := folder
-		lastIndex := 0
+	files := appState.imageFiles
+	index := (folder = appState.currentFolder) ? getArrayValueIndex(lFile, files) : 0
+	if !index {
+		files := GetImageFilesInFolder(folder)
+		index := getArrayValueIndex(lFile, files)
 	}
 
-	imgNo := getArrayValueIndex(lFile)
-	imgFile := lFile
-	LoadImage(imgNo)
+	if !index {
+		MsgBox(lang["File_invalid_file"] ":`n" lFile, , "Icon! 4096")
+		return false
+	}
+
+	return LoadImage(index, files, folder)
 }
 
 GetImageFilesInFolder(folder) {
-	global extensions
-	files := []
+	global appState
+	list := ""
 	Loop Files, folder "\*.*" {
-		if InStr(extensions, A_LoopFileExt)
-			files.Push(A_LoopFileFullPath)
+		if appState.supportedExtensions.Has(StrLower(A_LoopFileExt))
+			list .= A_LoopFileFullPath "`n"
 	}
-	return files
+	if (list = "")
+		return []
+	return StrSplit(Sort(RTrim(list, "`n"), "D`n", (a, b, *) => StrCompare(a, b)), "`n")
 }
 
-LoadImage(index) {
-	global
+LoadImage(index, imageFiles := "", folder := "") {
+	global appState
+	if !IsObject(imageFiles)
+		imageFiles := appState.imageFiles
+
 	if (index < 1 || index > imageFiles.Length) {
 		MsgBox(lang["File_invalid_file"], , "Icon! 4096")
-		return
+		return false
 	}
 
-	imgFile := imageFiles[index]
+	candidateFile := imageFiles[index]
 
-	if (index = lastIndex) {
-		return
-	}
+	if (candidateFile = appState.imgFile && index = appState.lastIndex && !appState.isClipboardImage)
+		return true
 
-	; Try loading image from memory stream to avoid locking the file on disk
-	newBitmap := CreateBitmapFromFileMemory(imgFile)
+	newBitmap := CreateBitmapFromFileMemory(candidateFile)
 	if !IsValidBitmap(newBitmap)
-		newBitmap := Gdip_CreateBitmapFromFile(imgFile)
+		newBitmap := Gdip_CreateBitmapFromFile(candidateFile)
 	if !IsValidBitmap(newBitmap) {
-		MsgBox(lang["Error_load_failed_msg"] " " imgFile, , "Icon! 4096")
-		return
+		MsgBox(lang["Error_load_failed_msg"] " " candidateFile, , "Icon! 4096")
+		if !appState.bitmap
+			ExitApp()
+		return false
 	}
 
-	; Clone the bitmap into a new GDI+ bitmap to ensure no underlying file handles remain
-	try {
-		cloned := CloneBitmap(newBitmap)
-		if cloned {
-			SafeDisposeBitmap(&newBitmap)
-			newBitmap := cloned
-		}
-	} catch {
-		; If cloning fails, keep original bitmap
+	cloned := CloneBitmap(newBitmap)
+	if cloned {
+		SafeDisposeBitmap(newBitmap)
+		newBitmap := cloned
 	}
 
-	SafeDisposeBitmap(&bitmap)
-	bitmap := newBitmap
-	lastIndex := index
+	ClearRenderCache()
+	SafeDisposeBitmap(appState.bitmap)
+	appState.bitmap := newBitmap
+	appState.imageFiles := imageFiles
+	if (folder != "")
+		appState.currentFolder := folder
+	appState.imgFile := candidateFile
+	appState.imgNo := index
+	appState.lastIndex := index
+	appState.isClipboardImage := false
 
-	originalWidth := Gdip_GetImageWidth(bitmap)
-	originalHeight := Gdip_GetImageHeight(bitmap)
+	ShowLoadedImage()
+	return true
+}
 
-	if (originalWidth > A_ScreenWidth || originalHeight > A_ScreenHeight) {
+ShowLoadedImage() {
+	global appState
+	appState.originalWidth := Gdip_GetImageWidth(appState.bitmap)
+	appState.originalHeight := Gdip_GetImageHeight(appState.bitmap)
+
+	if (appState.originalWidth > A_ScreenWidth || appState.originalHeight > A_ScreenHeight) {
 		ZoomImage(2)
 		return
 	}
-	else {
-		imgWidth := originalWidth
-		imgHeight := originalHeight
-		zoomFactor := 1
-	}
+	appState.imgWidth := appState.originalWidth
+	appState.imgHeight := appState.originalHeight
+	appState.zoomFactor := 1
 	ShowGui()
 }
 
-CreateBitmapFromFileMemory(sFile) {
-	; Create a GDI+ bitmap from a file's raw bytes to avoid keeping the file handle open
-	if !FileExist(sFile)
-		return 0
-
-	; Open file for read
+ReadFileToHGlobal(sFile) {
 	hFile := DllCall("Kernel32\CreateFileW", "WStr", sFile, "UInt", 0x80000000, "UInt", 3, "Ptr", 0, "UInt", 3, "UInt", 0x80, "Ptr", 0, "Ptr")
 	if (hFile = -1 || hFile = 0)
 		return 0
 
-	if !DllCall("Kernel32\GetFileSizeEx", "Ptr", hFile, "Int64*", &size := 0) {
-		DllCall("Kernel32\CloseHandle", "Ptr", hFile)
-		return 0
-	}
-	if (size = 0) {
-		DllCall("Kernel32\CloseHandle", "Ptr", hFile)
-		return 0
-	}
-
-	; Allocate global memory and read file contents into it
-	hMem := DllCall("GlobalAlloc", "UInt", 2, "Ptr", size, "Ptr")
-	pData := DllCall("GlobalLock", "Ptr", hMem, "Ptr")
-	if (!hMem || !pData) {
-		if pData
+	hMem := 0
+	if (DllCall("Kernel32\GetFileSizeEx", "Ptr", hFile, "Int64*", &size := 0) && size > 0 && size <= 0xFFFFFFFF) {
+		hMem := DllCall("GlobalAlloc", "UInt", 2, "Ptr", size, "Ptr")
+		pData := hMem ? DllCall("GlobalLock", "Ptr", hMem, "Ptr") : 0
+		ok := false
+		if pData {
+			ok := DllCall("Kernel32\ReadFile", "Ptr", hFile, "Ptr", pData, "UInt", size, "UInt*", &bytesRead := 0, "Ptr", 0) && bytesRead = size
 			DllCall("GlobalUnlock", "Ptr", hMem)
-		if hMem
-			DllCall("GlobalFree", "Ptr", hMem)
-		DllCall("Kernel32\CloseHandle", "Ptr", hFile)
-		return 0
+		}
+		if !ok {
+			if hMem
+				DllCall("GlobalFree", "Ptr", hMem)
+			hMem := 0
+		}
 	}
-	if !DllCall("Kernel32\ReadFile", "Ptr", hFile, "Ptr", pData, "UInt", size, "UInt*", &bytesRead := 0, "Ptr", 0) {
-		DllCall("GlobalUnlock", "Ptr", hMem)
-		DllCall("GlobalFree", "Ptr", hMem)
-		DllCall("Kernel32\CloseHandle", "Ptr", hFile)
-		return 0
-	}
-	if (bytesRead != size) {
-		DllCall("GlobalUnlock", "Ptr", hMem)
-		DllCall("GlobalFree", "Ptr", hMem)
-		DllCall("Kernel32\CloseHandle", "Ptr", hFile)
-		return 0
-	}
-	DllCall("GlobalUnlock", "Ptr", hMem)
 	DllCall("Kernel32\CloseHandle", "Ptr", hFile)
+	return hMem
+}
 
-	; Create an IStream on the HGLOBAL and make a bitmap from it
-	if !(DllCall("Ole32.dll\CreateStreamOnHGlobal", "Ptr", hMem, "Int", 1, "Ptr*", &pStream := 0)) {
+CreateBitmapFromFileMemory(sFile) {
+	hMem := ReadFileToHGlobal(sFile)
+	if !hMem
+		return 0
+
+	if DllCall("Ole32.dll\CreateStreamOnHGlobal", "Ptr", hMem, "Int", 1, "Ptr*", &pStream := 0) {
 		DllCall("GlobalFree", "Ptr", hMem)
 		return 0
 	}
@@ -507,31 +522,18 @@ CreateBitmapFromFileMemory(sFile) {
 }
 
 IsValidBitmap(pBitmap) {
-	if !IsSet(pBitmap) || pBitmap <= 0
-		return false
-	try {
-		DllCall("gdiplus\GdipGetImageWidth", "UPtr", pBitmap, "UInt*", &width := 0)
-		DllCall("gdiplus\GdipGetImageHeight", "UPtr", pBitmap, "UInt*", &height := 0)
-		return width > 0 && height > 0
-	} catch {
-		return false
-	}
+	return pBitmap > 0 && Gdip_GetImageWidth(pBitmap) > 0 && Gdip_GetImageHeight(pBitmap) > 0
 }
 
-SafeDisposeBitmap(&pBitmap) {
-	if IsSet(pBitmap) && pBitmap > 0 {
+SafeDisposeBitmap(pBitmap) {
+	if (pBitmap > 0)
 		try Gdip_DisposeImage(pBitmap)
-		pBitmap := 0
-	}
+	return 0
 }
 
 CloneBitmap(pSrcBitmap) {
-	if !IsValidBitmap(pSrcBitmap)
-		return 0
 	w := Gdip_GetImageWidth(pSrcBitmap)
 	h := Gdip_GetImageHeight(pSrcBitmap)
-	if (w <= 0 || h <= 0)
-		return 0
 
 	pNew := Gdip_CreateBitmap(w, h)
 	if !pNew
@@ -543,7 +545,6 @@ CloneBitmap(pSrcBitmap) {
 		return 0
 	}
 
-	; Draw source into new bitmap
 	Gdip_DrawImage(G, pSrcBitmap, 0, 0, w, h)
 	Gdip_DeleteGraphics(G)
 
@@ -551,130 +552,238 @@ CloneBitmap(pSrcBitmap) {
 }
 
 LoadImageByMode(mode) {
-	global imgNo, imageFiles, isClipboardImage
+	global appState
 
-	if isClipboardImage {
-		isClipboardImage := false
-	}
+	if !appState.imageFiles.Length
+		return false
+
+	candidateIndex := appState.imgNo
+	if (candidateIndex < 1 || candidateIndex > appState.imageFiles.Length)
+		candidateIndex := 1
 
 	switch mode {
-		case "first": imgNo := 1
-		case "last": imgNo := imageFiles.Length
+		case "first": candidateIndex := 1
+		case "last": candidateIndex := appState.imageFiles.Length
 		case "next":
-			imgNo++
-			if (imgNo > imageFiles.Length)
-				imgNo := 1
+			candidateIndex++
+			if (candidateIndex > appState.imageFiles.Length)
+				candidateIndex := 1
 		case "prev":
-			imgNo--
-			if (imgNo < 1)
-				imgNo := imageFiles.Length
+			candidateIndex--
+			if (candidateIndex < 1)
+				candidateIndex := appState.imageFiles.Length
 	}
-	LoadImage(imgNo)
+	return LoadImage(candidateIndex)
 }
 
 ShowImage(*) {
-	global
-	if !IsSet(bitmap) || !IsValidBitmap(bitmap)
-		return
+	global ui
 	ToolTip()
-	local hDC := DllCall("GetDC", "Ptr", g.Hwnd, "Ptr")
-	local GG := Gdip_GraphicsFromHDC(hDC)
-	Gdip_DrawImage(GG, bitmap, 0, 0, imgWidth, imgHeight)
-	Gdip_DeleteGraphics(GG)
-	DllCall("ReleaseDC", "Ptr", g.Hwnd, "Ptr", hDC)
+	UpdateRenderCache(true)
+	DllCall("InvalidateRect", "Ptr", ui.gui.Hwnd, "Ptr", 0, "Int", false)
+}
+
+EraseBkgnd(*) => 1
+
+PaintImage(wParam, lParam, msg, hwnd) {
+	global appState, ui
+	if (hwnd != ui.gui.Hwnd)
+		return
+
+	paintStruct := Buffer(A_PtrSize = 8 ? 72 : 64, 0)
+	hdc := DllCall("BeginPaint", "Ptr", hwnd, "Ptr", paintStruct.Ptr, "Ptr")
+	if !hdc
+		return 0
+
+	try {
+		if appState.hMemDC {
+			DllCall("BitBlt", "Ptr", hdc, "Int", 0, "Int", 0, "Int", appState.imgWidth, "Int", appState.imgHeight,
+				"Ptr", appState.hMemDC, "Int", 0, "Int", 0, "UInt", 0x00CC0020)
+		}
+	} finally {
+		DllCall("EndPaint", "Ptr", hwnd, "Ptr", paintStruct.Ptr)
+	}
+	return 0
+}
+
+UpdateRenderCache(force := false) {
+	global appState
+	if !appState.bitmap
+		return
+	if (!force && appState.hMemDC && appState.cachedW == appState.imgWidth && appState.cachedH == appState.imgHeight)
+		return
+
+	ClearRenderCache()
+
+	hdcScreen := DllCall("GetDC", "Ptr", 0, "Ptr")
+	appState.hMemDC := DllCall("CreateCompatibleDC", "Ptr", hdcScreen, "Ptr")
+	appState.hMemBitmap := DllCall("CreateCompatibleBitmap", "Ptr", hdcScreen, "Int", appState.imgWidth, "Int", appState.imgHeight, "Ptr")
+	appState.hOldBitmap := DllCall("SelectObject", "Ptr", appState.hMemDC, "Ptr", appState.hMemBitmap, "Ptr")
+	DllCall("ReleaseDC", "Ptr", 0, "Ptr", hdcScreen)
+
+	memGraphics := Gdip_GraphicsFromHDC(appState.hMemDC)
+	if memGraphics {
+		imgAttr := 0
+		try {
+			Gdip_SetInterpolationMode(memGraphics, 7)
+			DllCall("gdiplus\GdipSetPixelOffsetMode", "UPtr", memGraphics, "Int", 4)
+			DllCall("gdiplus\GdipCreateImageAttributes", "UPtr*", &imgAttr)
+			DllCall("gdiplus\GdipSetImageAttributesWrapMode", "UPtr", imgAttr, "Int", 3, "UInt", 0, "Int", 0)
+			DllCall("gdiplus\GdipDrawImageRectRectI", "UPtr", memGraphics, "UPtr", appState.bitmap
+				, "Int", 0, "Int", 0, "Int", appState.imgWidth, "Int", appState.imgHeight
+				, "Int", 0, "Int", 0, "Int", appState.originalWidth, "Int", appState.originalHeight
+				, "Int", 2, "UPtr", imgAttr, "UPtr", 0, "UPtr", 0)
+		} finally {
+			if imgAttr
+				Gdip_DisposeImageAttributes(imgAttr)
+			Gdip_DeleteGraphics(memGraphics)
+		}
+	}
+	appState.cachedW := appState.imgWidth
+	appState.cachedH := appState.imgHeight
+}
+
+ClearRenderCache() {
+	global appState
+	if appState.hMemDC {
+		if appState.hOldBitmap
+			DllCall("SelectObject", "Ptr", appState.hMemDC, "Ptr", appState.hOldBitmap)
+		if appState.hMemBitmap
+			DllCall("DeleteObject", "Ptr", appState.hMemBitmap)
+		DllCall("DeleteDC", "Ptr", appState.hMemDC)
+		appState.hMemDC := 0
+		appState.hMemBitmap := 0
+		appState.hOldBitmap := 0
+		appState.cachedW := 0
+		appState.cachedH := 0
+	}
 }
 
 ZoomImage(zoomMode) {
-	global
-	static prevZoomFactor := 1
+	global appState, ui
+	if (appState.originalWidth < 1)
+		return
 
-	; Zoom öncesi pencere merkez noktasını kaydet (pencere görünürse)
-	local anchorCX := "", anchorCY := ""
-	if DllCall("IsWindowVisible", "Ptr", g.Hwnd) {
-		WinGetPos(&_wx, &_wy, &_ww, &_wh, g)
-		anchorCX := _wx + _ww / 2
-		anchorCY := _wy + _wh / 2
+	anchorCX := "", anchorCY := ""
+	visible := DllCall("IsWindowVisible", "Ptr", ui.gui.Hwnd)
+	if visible {
+		WinGetPos(&wx, &wy, &ww, &wh, ui.gui)
+		anchorCX := wx + ww / 2
+		anchorCY := wy + wh / 2
 	}
 
+	minFactor := Min(1, appState.minDisplaySize / Max(appState.originalWidth, appState.originalHeight))
+	maxFactor := Max(1, Min(appState.zoomSteps[appState.zoomSteps.Length] / 100, Sqrt(appState.maxDisplayPixels / (appState.originalWidth * appState.originalHeight))))
 	switch zoomMode {
-		case 0: zoomFactor := 1
-		case 1: zoomFactor += 0.1
-		case -1: zoomFactor -= 0.1
+		case 0: appState.zoomFactor := 1
+		case 1:
+			if (appState.zoomFactor >= maxFactor)
+				return
+			appState.zoomFactor := Min(NextZoomStep(appState.zoomFactor * 100, 1) / 100, maxFactor)
+		case -1:
+			if (appState.zoomFactor <= minFactor)
+				return
+			appState.zoomFactor := Max(NextZoomStep(appState.zoomFactor * 100, -1) / 100, minFactor)
 		case 2:
-			local mNo := GetActiveMonitor()
-			local mWidth := A_ScreenWidth
-			local mHeight := A_ScreenHeight
-			try {
-				MonitorGet(mNo, &mLeft, &mTop, &mRight, &mBottom)
-				mWidth := mRight - mLeft
-				mHeight := mBottom - mTop
+			GetWorkArea(&mLeft, &mTop, &mRight, &mBottom)
+			availW := mRight - mLeft
+			availH := mBottom - mTop
+			if visible {
+				WinGetClientPos(, , &cw, &ch, ui.gui)
+				availW -= Max(0, ww - cw)
+				availH -= Max(0, wh - ch)
 			}
-			local imgAspectRatio := originalWidth / originalHeight
-			if (imgAspectRatio > (mWidth / mHeight)) {
-				zoomFactor := mWidth / originalWidth
-			} else {
-				zoomFactor := mHeight / originalHeight
-			}
+			appState.zoomFactor := Min(availW / appState.originalWidth, availH / appState.originalHeight, maxFactor)
 	}
 
-	if (zoomFactor < 0.1)
-		zoomFactor := prevZoomFactor
-	else
-		prevZoomFactor := zoomFactor
-
-	imgWidth := Round(originalWidth * zoomFactor)
-	imgHeight := Round(originalHeight * zoomFactor)
+	appState.imgWidth := Max(1, Round(appState.originalWidth * appState.zoomFactor))
+	appState.imgHeight := Max(1, Round(appState.originalHeight * appState.zoomFactor))
 	ShowGui(anchorCX, anchorCY)
 }
 
+NextZoomStep(percent, direction) {
+	global appState
+	steps := appState.zoomSteps
+	if (direction > 0) {
+		for step in steps {
+			if (step > percent + 0.01)
+				return step
+		}
+		return steps[steps.Length]
+	}
+	Loop steps.Length {
+		step := steps[steps.Length - A_Index + 1]
+		if (step < percent - 0.01)
+			return step
+	}
+	return 0
+}
+
 toggleAOT(*) {
-	global rcMenu, mnuTxt, g
-	rcMenu.ToggleCheck(mnuTxt.aot)
-	WinSetAlwaysOnTop(-1, g)
+	global ui
+	WinSetAlwaysOnTop(-1, ui.gui)
+	SetMenuCheck(ui.rcMenu, ui.mnuTxt.aot, IsAlwaysOnTop())
 }
 
 toggleBorder(*) {
-	global rcMenu, mnuTxt, g
-	rcMenu.ToggleCheck(mnuTxt.border)
-	WinSetStyle("^0x800000", g)
-	g.Show()
+	global appState, ui
+	WinSetStyle(HasBorder() ? "-0x800000" : "+0x800000", ui.gui)
+	SetMenuCheck(ui.rcMenu, ui.mnuTxt.border, HasBorder())
+	DllCall("SetWindowPos", "Ptr", ui.gui.Hwnd, "Ptr", 0, "Int", 0, "Int", 0, "Int", 0, "Int", 0, "UInt", 0x27)
+	if (appState.imgWidth > 0 && appState.imgHeight > 0 && DllCall("IsWindowVisible", "Ptr", ui.gui.Hwnd)) {
+		WinGetPos(&x, &y, , , ui.gui)
+		ui.gui.Show("w" appState.imgWidth " h" appState.imgHeight " x" x " y" y)
+		PositionTitleButtons(appState.imgWidth)
+	}
+	DllCall("RedrawWindow", "Ptr", ui.gui.Hwnd, "Ptr", 0, "Ptr", 0, "UInt", 0x485)
 }
 
 toggleCenterImage(*) {
-	global centerImage, rcMenu, mnuTxt
-	centerImage := !centerImage
-	rcMenu.ToggleCheck(mnuTxt.center)
-	if centerImage
+	global appState, ui
+	appState.centerImage := !appState.centerImage
+	ui.rcMenu.ToggleCheck(ui.mnuTxt.center)
+	if appState.centerImage
 		ShowGui()
 }
 
 ShowGui(anchorCX := "", anchorCY := "") {
-	global imgWidth, imgHeight, g, centerImage, windowX, windowY, windowPositionLoaded
-	local sizeTxt := "w" imgWidth " h" imgHeight
+	global appState, ui
+	UpdateRenderCache()
 
-	if centerImage {
-		g.Show("w0")
-		g.Show(sizeTxt " Center")
-		return
-	}
+	getLong := DllCall.Bind(A_PtrSize = 8 ? "GetWindowLongPtr" : "GetWindowLong", "Ptr", ui.gui.Hwnd)
+	rc := Buffer(16, 0)
+	NumPut("Int", appState.imgWidth, "Int", appState.imgHeight, rc, 8)
+	DllCall("AdjustWindowRectEx", "Ptr", rc, "UInt", getLong("Int", -16, "Ptr"), "Int", false, "UInt", getLong("Int", -20, "Ptr"))
+	outerW := NumGet(rc, 8, "Int") - NumGet(rc, 0, "Int")
+	outerH := NumGet(rc, 12, "Int") - NumGet(rc, 4, "Int")
 
-	if (anchorCX != "" && anchorCY != "") {
-		x := Round(anchorCX - imgWidth / 2)
-		y := Round(anchorCY - imgHeight / 2)
-	} else if DllCall("IsWindowVisible", "Ptr", g.Hwnd) {
-		WinGetPos(&x, &y, , , g)
+	visible := DllCall("IsWindowVisible", "Ptr", ui.gui.Hwnd)
+	if appState.centerImage {
+		GetWorkArea(&mLeft, &mTop, &mRight, &mBottom)
+		x := mLeft + Max(0, Round((mRight - mLeft - outerW) / 2))
+		y := mTop + Max(0, Round((mBottom - mTop - outerH) / 2))
+	} else if (anchorCX != "" && anchorCY != "") {
+		x := Round(anchorCX - outerW / 2)
+		y := Round(anchorCY - outerH / 2)
+	} else if visible {
+		WinGetPos(&x, &y, , , ui.gui)
 	} else {
-		x := windowPositionLoaded ? windowX : 0
-		y := windowPositionLoaded ? windowY : 0
+		x := appState.windowPositionLoaded ? appState.windowX : 0
+		y := appState.windowPositionLoaded ? appState.windowY : 0
 		if !IsWindowPositionOnScreen(x, y) {
 			x := 0
 			y := 0
 		}
 	}
 
-	local posTxt := " x" x " y" y
-	g.Show("w0" posTxt)
-	g.Show(sizeTxt posTxt)
+	if visible {
+		DllCall("SetWindowPos", "Ptr", ui.gui.Hwnd, "Ptr", 0, "Int", x, "Int", y, "Int", outerW, "Int", outerH, "UInt", 0x14)
+		DllCall("RedrawWindow", "Ptr", ui.gui.Hwnd, "Ptr", 0, "Ptr", 0, "UInt", 0x501)
+	} else {
+		ui.gui.Show("w" appState.imgWidth " h" appState.imgHeight " x" x " y" y)
+	}
+	PositionTitleButtons(appState.imgWidth)
+	UpdateTitleButtonsVisibility()
 }
 
 IsWindowPositionOnScreen(x, y) {
@@ -690,11 +799,16 @@ IsWindowPositionOnScreen(x, y) {
 	return false
 }
 
+GetWorkArea(&left, &top, &right, &bottom) {
+	left := 0, top := 0, right := A_ScreenWidth, bottom := A_ScreenHeight
+	try MonitorGetWorkArea(GetActiveMonitor(), &left, &top, &right, &bottom)
+}
+
 GetActiveMonitor() {
-	global g
-	if !DllCall("IsWindowVisible", "Ptr", g.Hwnd)
+	global ui
+	if !DllCall("IsWindowVisible", "Ptr", ui.gui.Hwnd)
 		return 1
-	WinGetPos(&wx, &wy, &ww, &wh, g)
+	WinGetPos(&wx, &wy, &ww, &wh, ui.gui)
 	centerX := wx + ww / 2
 	centerY := wy + wh / 2
 	try {
@@ -707,12 +821,12 @@ GetActiveMonitor() {
 	return 1
 }
 
-getArrayValueIndex(val) {
-	global imageFiles
-	Loop imageFiles.Length {
-		if (imageFiles[A_Index] = val)
-			return A_Index
+getArrayValueIndex(val, files) {
+	for index, file in files {
+		if (file = val)
+			return index
 	}
+	return 0
 }
 
 mouseIsOver(windowIdentifier) {
@@ -720,76 +834,143 @@ mouseIsOver(windowIdentifier) {
 	return (winHwnd = windowIdentifier)
 }
 
-GuiSize(gui, minMax, width, height) {
-	if (minMax = 0) {
-		ShowImage()
+PositionTitleButtons(guiWidth := "") {
+	global appState, ui
+	if (guiWidth = "")
+		WinGetClientPos(, , &guiWidth, , ui.gui)
+	ui.closeButton.Move(Max(0, guiWidth - appState.titleBtnWidth), 0, appState.titleBtnWidth, appState.titleBtnHeight)
+	ui.minButton.Move(Max(0, guiWidth - appState.titleBtnWidth * 2), 0, appState.titleBtnWidth, appState.titleBtnHeight)
+}
+
+HandleCloseButtonMouseMove(wParam, lParam, msg, hwnd) {
+	global ui
+	if (hwnd != ui.gui.Hwnd && hwnd != ui.closeButton.Hwnd && hwnd != ui.minButton.Hwnd)
+		return
+
+	TrackMouseLeave(hwnd)
+	UpdateTitleButtonsVisibility()
+}
+
+HandleCloseButtonMouseLeave(wParam, lParam, msg, hwnd) {
+	global appState, ui
+	if appState.mouseTracking.Has(hwnd)
+		appState.mouseTracking.Delete(hwnd)
+	if (hwnd = ui.gui.Hwnd || hwnd = ui.closeButton.Hwnd || hwnd = ui.minButton.Hwnd)
+		UpdateTitleButtonsVisibility()
+}
+
+TrackMouseLeave(hwnd) {
+	global appState
+	if appState.mouseTracking.Has(hwnd)
+		return
+
+	tracking := Buffer(A_PtrSize = 8 ? 24 : 16, 0)
+	NumPut("UInt", tracking.Size, tracking)
+	NumPut("UInt", 0x2, tracking, 4)
+	NumPut("Ptr", hwnd, tracking, 8)
+	if DllCall("TrackMouseEvent", "Ptr", tracking.Ptr)
+		appState.mouseTracking[hwnd] := true
+}
+
+UpdateTitleButtonsVisibility() {
+	global appState, ui
+	if !DllCall("IsWindowVisible", "Ptr", ui.gui.Hwnd, "Int") {
+		ui.minButton.Visible := false
+		ui.closeButton.Visible := false
+		return
 	}
+
+	CoordMode("Mouse", "Screen")
+	MouseGetPos(&mouseX, &mouseY)
+	WinGetClientPos(&windowX, &windowY, &windowWidth, &windowHeight, ui.gui)
+	nearCorner := (mouseX >= windowX + windowWidth - appState.titleBtnWidth * 2 - 24
+		&& mouseX <= windowX + windowWidth
+		&& mouseY >= windowY
+		&& mouseY <= windowY + 48)
+	if (nearCorner = ui.closeButton.Visible)
+		return
+
+	if nearCorner {
+		ui.minButton.Visible := true
+		ui.closeButton.Visible := true
+		ui.minButton.Redraw()
+		ui.closeButton.Redraw()
+		return
+	}
+
+	ui.minButton.Visible := false
+	ui.closeButton.Visible := false
+	buttonX := Max(0, windowWidth - appState.titleBtnWidth * 2)
+	buttonRect := Buffer(16, 0)
+	NumPut("Int", buttonX, "Int", 0, "Int", buttonX + appState.titleBtnWidth * 2, "Int", appState.titleBtnHeight, buttonRect)
+	DllCall("InvalidateRect", "Ptr", ui.gui.Hwnd, "Ptr", buttonRect.Ptr, "Int", false)
+}
+
+MinimizeWindow(*) {
+	global ui
+	ui.minButton.Visible := false
+	ui.closeButton.Visible := false
+	ui.gui.Minimize()
 }
 
 GuiClose(*) {
-	global bitmap, pToken
+	global appState
 	SaveSettings()
-	SafeDisposeBitmap(&bitmap)
-	Gdip_Shutdown(pToken)
+	ClearRenderCache()
+	appState.bitmap := SafeDisposeBitmap(appState.bitmap)
+	Gdip_Shutdown(appState.pToken)
 	ExitApp()
 }
 
 ShowFileInFolder() {
-	global imgFile, isClipboardImage
+	global appState
 
-	if isClipboardImage {
+	if appState.isClipboardImage {
 		MsgBox(lang["File_clipboard_image"], , "Icon! 4096")
 		return
 	}
 
-	Run('explorer.exe /select,"' imgFile '"')
+	Run('explorer.exe /select,"' appState.imgFile '"')
 	WinWait("ahk_class CabinetWClass")
 	WinActivate("ahk_class CabinetWClass")
 	WinSetAlwaysOnTop(, "A")
 }
 
 DeleteCurrentImage() {
-	global imgFile, isClipboardImage, imageFiles, imgNo, bitmap, lastIndex, g
+	global appState, ui
 
-	; Image pasted from clipboard cannot be deleted
-	if isClipboardImage {
+	if appState.isClipboardImage {
 		MsgBox(lang["File_clipboard_image"], , "Icon! 4096")
 		return
 	}
 
-	; Deletion confirmation
-	result := MsgBox(lang["File_delete_confirm"] "`n`n" imgFile,
+	result := MsgBox(lang["File_delete_confirm"] "`n`n" appState.imgFile,
 		lang["File_delete_title"], "YesNo Icon! 4096")
 
 	if (result != "Yes")
 		return
 
-	fileToDelete := imgFile
-	; Hide GUI and release bitmap
-	g.Hide()
-	SafeDisposeBitmap(&bitmap)
-	Sleep(100)  ; Short wait for GDI+
+	fileToDelete := appState.imgFile
+	ui.minButton.Visible := false
+	ui.closeButton.Visible := false
+	ui.gui.Hide()
+	ClearRenderCache()
+	appState.bitmap := SafeDisposeBitmap(appState.bitmap)
+	appState.lastIndex := 0
+	Sleep(100)
 
-	; Send file to recycle bin
 	try {
 		FileRecycle(fileToDelete)
 
-		; Deletion successful - remove from list and move to next image
-		imageFiles.RemoveAt(imgNo)
-		lastIndex := 0
+		appState.imageFiles.RemoveAt(appState.imgNo)
 
-		if (imageFiles.Length > 0) {
-			if (imgNo > imageFiles.Length)
-				imgNo := imageFiles.Length
-			; If the current image was the last one, load the new last image
-			; Otherwise, load the image at the current index (which is now the next image)
-			LoadImage(imgNo)
+		if (appState.imageFiles.Length > 0) {
+			appState.imgNo := Min(appState.imgNo, appState.imageFiles.Length)
+			LoadImage(appState.imgNo)
 		} else {
 			GuiClose()
 		}
-
 	} catch as err {
-		; Deletion failed - show error message
 		errorMsg := lang["File_delete_error_msg"] "`n" fileToDelete "`n`n"
 		errorMsg .= lang["File_delete_error_reasons"] "`n"
 		errorMsg .= lang["File_delete_error_in_use"] "`n"
@@ -799,26 +980,25 @@ DeleteCurrentImage() {
 
 		MsgBox(errorMsg, lang["File_delete_error_title"], "Icon! 16")
 
-		; Reload image in case of error
-		LoadImage(imgNo)
+		LoadImage(appState.imgNo)
 	}
 }
 
 FileInfo() {
-	global imgFile, originalWidth, originalHeight, imgWidth, imgHeight, isClipboardImage
+	global appState, ui
 
-	if isClipboardImage {
+	if appState.isClipboardImage {
 		m := lang["FileInfo_source"] ": " lang["FileInfo_clipboard"] "`n"
-		m .= lang["FileInfo_orig_size"] ": " originalWidth "x" originalHeight "`n"
-		m .= lang["FileInfo_disp_size"] ": " imgWidth "x" imgHeight
+		m .= lang["FileInfo_orig_size"] ": " appState.originalWidth "x" appState.originalHeight "`n"
+		m .= lang["FileInfo_disp_size"] ": " appState.imgWidth "x" appState.imgHeight
 	}
 	else {
-		SplitPath(imgFile, &file, &dir)
+		SplitPath(appState.imgFile, &file, &dir)
 		mfd := FileDT("M")
 		cfd := FileDT("C")
 		afd := FileDT("A")
 		try {
-			fsize := FileGetSize(imgFile)
+			fsize := FileGetSize(appState.imgFile)
 			fs := FormatByteSize(fsize) " (" RegExReplace(fsize, "(\d)(?=(\d{3})+(?!\d))", "$1.") " bytes)"
 		} catch {
 			fs := "N/A"
@@ -828,36 +1008,39 @@ FileInfo() {
 		m .= lang["FileInfo_mod_time"] ": " mfd "`n"
 		m .= lang["FileInfo_create_time"] ": " cfd "`n"
 		m .= lang["FileInfo_access_time"] ": " afd "`n"
-		m .= lang["FileInfo_orig_size"] ": " originalWidth "x" originalHeight "`n"
-		m .= lang["FileInfo_disp_size"] ": " imgWidth "x" imgHeight "`n"
+		m .= lang["FileInfo_orig_size"] ": " appState.originalWidth "x" appState.originalHeight "`n"
+		m .= lang["FileInfo_disp_size"] ": " appState.imgWidth "x" appState.imgHeight "`n"
 		m .= lang["FileInfo_file_size"] ": " fs
 	}
 
+	zoomPercent := appState.zoomFactor * 100
+	m .= "`n" lang["FileInfo_zoom"] ": " Round(zoomPercent, zoomPercent < 10 ? 1 : 0) "%"
+
 	CoordMode("ToolTip", "Screen")
-	WinGetPos(&x, &y, , , g)
+	WinGetPos(&x, &y, , , ui.gui)
 	tX := Max(0, x)
 	tY := Max(0, y)
 	ToolTip(m, tX + 5, tY + 5)
 }
 
 FileDT(opt) {
-	global imgFile
+	global appState
 	try {
-		return FormatTime(FileGetTime(imgFile, opt), "d MMMM yyyy ddd HH:mm:ss")
+		return FormatTime(FileGetTime(appState.imgFile, opt), "d MMMM yyyy ddd HH:mm:ss")
 	} catch {
 		return "N/A"
 	}
 }
 
 FileProperties() {
-	global imgFile, isClipboardImage
+	global appState
 
-	if isClipboardImage {
+	if appState.isClipboardImage {
 		MsgBox(lang["File_clipboard_image"], , "Icon! 4096")
 		return
 	}
 
-	Run('Properties "' imgFile '"')
+	Run('Properties "' appState.imgFile '"')
 	WinWait("ahk_class #32770")
 	WinSetAlwaysOnTop(, "A")
 }
@@ -869,36 +1052,44 @@ FormatByteSize(int, flags := 0x2) {
 }
 
 MoveWindow() {
+	global appState
 	CoordMode("Mouse")
 	MouseGetPos &msX, &msY, &win
+	WinGetPos(&startX, &startY, , , win)
 	if !WinGetMinMax(win)
 		SetTimer(WatchMouse, 10)
 
 	WatchMouse() {
+		global appState
 		if !GetKeyState("LButton", "P") {
 			SetTimer(, 0)
-			ShowImage()
+			WinGetPos(&endX, &endY, , , win)
+			if (endX != startX || endY != startY)
+				appState.windowPositionDirty := true
+			ToolTip()
 			return
 		}
 		CoordMode("Mouse")
 		MouseGetPos(&mX, &mY)
+		if (mX = msX && mY = msY)
+			return
 		WinGetPos(&wX, &wY, , , win)
 		SetWinDelay(-1)
 		WinMove(wX + mX - msX, wY + mY - msY, , , win)
 		msX := mX
 		msY := mY
+		DllCall("UpdateWindow", "Ptr", win)
 	}
 }
 
 Gui_DropFiles(GuiObj, GuiCtrlObj, FileArray, X, Y) {
-	global dropFile
-	dropFile := FileArray[1]
+	global appState
+	appState.dropFile := FileArray[1]
 	OpenFile()
 }
 
 PasteImageFromClipboard() {
-	global bitmap, originalWidth, originalHeight, imgWidth, imgHeight
-	global zoomFactor, isClipboardImage, imgFile, lastIndex
+	global appState
 
 	pBitmap := Gdip_CreateBitmapFromClipboard()
 
@@ -907,24 +1098,14 @@ PasteImageFromClipboard() {
 		return
 	}
 
-	SafeDisposeBitmap(&bitmap)
-	bitmap := pBitmap
-	isClipboardImage := true
-	imgFile := lang["FileInfo_clipboard"]
-	lastIndex := 0
+	ClearRenderCache()
+	SafeDisposeBitmap(appState.bitmap)
+	appState.bitmap := pBitmap
+	appState.isClipboardImage := true
+	appState.imgFile := lang["FileInfo_clipboard"]
+	appState.lastIndex := 0
 
-	originalWidth := Gdip_GetImageWidth(bitmap)
-	originalHeight := Gdip_GetImageHeight(bitmap)
-
-	if (originalWidth > A_ScreenWidth || originalHeight > A_ScreenHeight) {
-		ZoomImage(2)
-	}
-	else {
-		imgWidth := originalWidth
-		imgHeight := originalHeight
-		zoomFactor := 1
-		ShowGui()
-	}
+	ShowLoadedImage()
 }
 
 Shortcuts(*) {
@@ -966,22 +1147,24 @@ Shortcuts(*) {
 		lang["Shortcuts_mouse_middle_dbl"]
 	]
 
+	txt := ""
 	for shortcut in kbShortcuts
 		txt .= shortcut "`n"
 	txt .= "`n"
 	for shortcut in mouseShortcuts
 		txt .= shortcut "`n"
 
-	MsgBox(txt, lang["Shortcuts_title"], "Owner" g.Hwnd)
+	MsgBox(txt, lang["Shortcuts_title"], "Owner" ui.gui.Hwnd)
 }
 
 CopyImageToClipboard() {
-	global bitmap
-	if !IsSet(bitmap) || !bitmap {
+	global appState, ui
+	if !appState.bitmap {
 		MsgBox(lang["File_nofile"], , "Icon! 4096")
 		return
 	}
-	Gdip_SetBitmapToClipboard(bitmap)
+	if !Gdip_SetBitmapToClipboard(appState.bitmap, ui.gui.Hwnd)
+		MsgBox(lang["File_copy_failed"], , "Icon! 4096")
 }
 
 About(*) {
@@ -993,5 +1176,5 @@ About(*) {
 	txt .= "mesutakcan.blogspot.com`n"
 	txt .= "github.com/mesutakcan`n"
 	txt .= "youtube.com/mesutakcan"
-	MsgBox(txt, lang["About_about"], "Owner" g.Hwnd)
+	MsgBox(txt, lang["About_about"], "Owner" ui.gui.Hwnd)
 }

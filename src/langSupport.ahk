@@ -448,8 +448,8 @@ LCID := Map(
 )
 
 ; Load language with fallback to English
-; forceLangCode: kullanıcının menüden seçtiği veya ayarlarda kayıtlı dil kodu (örn. "tr").
-; Boş bırakılırsa sistem diline göre otomatik seçim yapılır.
+; forceLangCode: language code chosen from the menu or saved in settings (e.g. "tr").
+; If empty, the language is picked from the system language.
 LoadLanguage(forceLangCode := "") {
 	global lang := Map(), currentLangCode
 	langDir := A_ScriptDir "\lang\"
@@ -459,7 +459,6 @@ LoadLanguage(forceLangCode := "") {
 		ExitApp()
 	}
 
-	; Load English first as fallback
 	englishFile := langDir "en.ini"
 	if !FileExist(englishFile) {
 		MsgBox("English language file (en.ini) not found in:`n" langDir "`n`nThis file is required as a fallback translation. The application cannot continue.", A_ScriptName, "Iconx 4096")
@@ -468,7 +467,6 @@ LoadLanguage(forceLangCode := "") {
 	LoadLangFile(englishFile)
 	currentLangCode := "en"
 
-	; Kullanıcının kayıtlı/seçili dili varsa onu yükle
 	if (forceLangCode != "") {
 		langFile := langDir forceLangCode ".ini"
 		if FileExist(langFile) {
@@ -478,7 +476,6 @@ LoadLanguage(forceLangCode := "") {
 		return
 	}
 
-	; Kayıtlı tercih yoksa sistem diline göre otomatik seçim yap
 	langID := LCID.Has(A_Language) ? LCID[A_Language][1] : ""
 	if (langID != "" && langID != "en") {
 		langFile := langDir langID ".ini"
@@ -492,23 +489,21 @@ LoadLanguage(forceLangCode := "") {
 	}
 }
 
-; LCID tablosundaki [kod, ad] verilerinden, kod -> ad eşlemesi çıkarır (küçük harfli kodlarla)
+; Builds a lowercase code -> display name map from the LCID table
 GetLanguageCodeNames() {
 	static codeNames := Map()
-	static initialized := false
 
-	if !initialized {
-		for lcid_, entry in LCID {
+	if !codeNames.Count {
+		for , entry in LCID {
 			code := StrLower(entry[1])
 			if !codeNames.Has(code)
 				codeNames[code] := entry[2]
 		}
-		initialized := true
 	}
 	return codeNames
 }
 
-; LCID tablosundan alınan görünen adlarını döndürür (örn. "ro-md.ini" -> "Romanian (Moldova)")
+; Maps each lang/*.ini code to its display name from the LCID table (e.g. "ro-md" -> "Romanian (Moldova)")
 GetAvailableLanguages() {
 	codeNames := GetLanguageCodeNames()
 	langDir := A_ScriptDir "\lang\"
@@ -527,11 +522,10 @@ GetAvailableLanguages() {
 	return result
 }
 
-; Load language file into lang Map
 LoadLangFile(filePath) {
 	global lang
 
-	for section in ["Menu", "File", "Shortcuts", "FileInfo", "About"] {
+	for section in ["Menu", "File", "Shortcuts", "FileInfo", "About", "Error"] {
 		sectionContent := IniRead(filePath, section)
 		keys := StrSplit(sectionContent, "`n")
 		for key in keys {
